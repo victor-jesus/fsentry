@@ -43,9 +43,7 @@ class TestListDirectorySecurity:
 class TestListDirectoryOrderBy:
     def test_invalid_order_by_raises_key_error(self, tmp_path):
         fm = FileManager(tmp_path)
-        with pytest.raises(KeyError):
-            fm._is_key_valid('invalid')
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError):
             fm.list_directory(Path('.'), 'invalid')
 
     def test_valid_order_by(self, tmp_path):

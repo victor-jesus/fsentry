@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+from collections.abc import Generator
 
 class FileManager():
     """
@@ -63,10 +64,10 @@ class FileManager():
             key: The field name to validate.
 
         Raises:
-            KeyError: If the field is not in VALID_ORDER_FIELDS.
+            ValueError: If the field is not in VALID_ORDER_FIELDS.
         """
         if key not in self.VALID_ORDER_FIELDS:
-            raise KeyError(f"Invalid Field {key}. Fields: {', '.join(self.VALID_ORDER_FIELDS)}")
+            raise ValueError(f"Invalid Field {key}. Fields: {', '.join(self.VALID_ORDER_FIELDS)}")
 
     def _safe_resolve(self, path: Path) -> Path:
         """
@@ -110,6 +111,47 @@ class FileManager():
         reverse = key.startswith('-')
         field = key[1:] if reverse else key
         return field, reverse
+    
+    def iter_directory(self, path: Path) -> Generator[dict, None, None]:
+        """
+        Iter through a directory given by path.
+
+        Args:
+            path: indicates wich directory to iterate.
+
+        Returns:
+            A dict containing valid fields
+            
+        Raises:
+            FileNotFoundError: If the resolved path isn't a file/folder.
+            NotADirectoryError: If the resolved path isn't a directory.   
+
+        Example:
+            >>> data = list(self.iter_directory(Path('example')))
+        """
+        resolved_path = self._safe_resolve(path)
+        if not resolved_path.exists():
+            raise FileNotFoundError("Path does not exists.")
+        if not resolved_path.is_dir():
+            raise NotADirectoryError("Path is not a directory.")
+        
+        for child in resolved_path.iterdir():
+            try:
+                stats = child.stat()
+                is_dir = child.is_dir()
+            except (PermissionError, FileNotFoundError):
+                continue
+            
+            datetime_child = datetime.fromtimestamp(stats.st_mtime)
+            datetime_child = datetime_child.strftime(self.DT_TEMPLATE)
+            yield {
+                'name': child.name,
+                'path': str(child.relative_to(self._root_dir)),
+                'type': 'directory' if is_dir else 'file',
+                'size': stats.st_size,
+                'modified_at': datetime_child,
+                'extension': child.suffix.lstrip('.')
+            }
 
     def list_directory(self, path: Path, order_by: str | None = None) -> dict:
         """
@@ -141,34 +183,14 @@ class FileManager():
             PermissionError: If the path is outside the root directory.
             FileNotFoundError: If the path does not exist.
             NotADirectoryError: If the path is not a directory.
-            KeyError: If order_by field is invalid.
+            ValueError: If order_by field is invalid.
 
         Example:
             >>> fm = FileManager('/home/victor/documents')
             >>> fm.list_directory(Path('.'))
             >>> fm.list_directory(Path('.'), order_by='-size')
         """
-        resolved_path = self._safe_resolve(path)
-        if not resolved_path.exists():
-            raise FileNotFoundError("Path does not exists.")
-        if not resolved_path.is_dir():
-            raise NotADirectoryError("Path is not a directory.")
-
-        data = []
-        for child in resolved_path.iterdir():
-            stats = child.stat()
-            is_dir = child.is_dir()
-            datetime_child = datetime.fromtimestamp(stats.st_mtime)
-            datetime_child = datetime_child.strftime(self.DT_TEMPLATE)
-            obj_child = {
-                'name': child.name,
-                'path': str(child.relative_to(self._root_dir)),
-                'type': 'directory' if is_dir else 'file',
-                'size': stats.st_size,
-                'modified_at': datetime_child,
-                'extension': child.suffix.lstrip('.')
-            }
-            data.append(obj_child)
+        data = list(self.iter_directory(path))
 
         if order_by:
             field, reverse = self._order_by_key_normalize(order_by)
@@ -188,7 +210,6 @@ class FileManager():
             'total': len(data),
             'data': data
         }
-
 
 if __name__ == '__main__':
     fm = FileManager(Path.cwd())
