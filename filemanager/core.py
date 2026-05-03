@@ -119,8 +119,16 @@ class FileManager():
         Args:
             path: indicates wich directory to iterate.
 
-        Returns:
-            A dict containing valid fields
+        Yield:
+            A dict for each file/folder item with the following structure:
+            {
+                'name': str,
+                'path': str,
+                'type': 'file' | 'directory',
+                'size': int,
+                'modified_at': str,
+                'extension': str
+            }
             
         Raises:
             FileNotFoundError: If the resolved path isn't a file/folder.
@@ -202,7 +210,6 @@ class FileManager():
                     (item.get(field) or 0) if field == 'size' 
                     else (item.get(field) or '')
                 ),
-                
                 reverse=reverse
             )
 
@@ -210,7 +217,61 @@ class FileManager():
             'total': len(data),
             'data': data
         }
+    
+    def search(self, value: str, keys: list[str] | None = None, path: Path | None = None) -> Generator[dict, None, None]:
+        """
+        Search for files and directories matching a value within the root.
 
+        Performs a case-insensitive partial match against all fields or specific fields.
+
+        Args:
+            value: The search term to match against.
+            keys: Optional list of fields to search in. If None, searches all fields.
+                Valid fields: name, path, type, size, modified_at, extension.
+            path: Optional directory to search in. Defaults to root directory.
+
+        Yield:
+            A dict for each matching item with the following structure:
+            {
+                'name': str,
+                'path': str,
+                'type': 'file' | 'directory',
+                'size': int,
+                'modified_at': str,
+                'extension': str
+            }
+
+        Raises:
+            PermissionError: If the path is outside the root directory.
+            FileNotFoundError: If the path does not exist.
+            NotADirectoryError: If the path is not a directory.
+            ValueError: If any key in keys is invalid.
+
+        Example:
+            >>> fm = FileManager('/home/victor/documents')
+            >>> list(fm.search('report'))
+            >>> list(fm.search('report', keys=['name']))
+            >>> list(fm.search('report', keys=['name'], path=Path('work')))
+        """
+        path = path or self._root_dir
+        value_lower = value.lower()    
+        
+        if keys is not None:
+            for k in keys:
+                self._is_key_valid(k)
+                
+            def match(item):
+                return any(value_lower in str(item[k]).lower() for k in keys)
+        else:
+            def match(item):
+                return any(value_lower in str(v).lower() for v in item.values())
+        
+        for item in self.iter_directory(path):
+            if match(item):
+                yield item
+        
 if __name__ == '__main__':
     fm = FileManager(Path.cwd())
-    print(fm.list_directory(Path('.'), '-name'))
+    data = fm.search(keys=['name'], value="TEST")
+    for item in data:
+        print(item)
