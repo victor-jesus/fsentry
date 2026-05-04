@@ -112,12 +112,15 @@ class FileManager():
         field = key[1:] if reverse else key
         return field, reverse
     
-    def iter_directory(self, path: Path) -> Generator[dict, None, None]:
+    def iter_directory(self, 
+                       path: Path, 
+                       recursive: bool = False) -> Generator[dict, None, None]:
         """
         Iter through a directory given by path.
 
         Args:
             path: indicates wich directory to iterate.
+            recursive: indicates if must iterate through directories recursively.
 
         Yield:
             A dict for each file/folder item with the following structure:
@@ -135,7 +138,7 @@ class FileManager():
             NotADirectoryError: If the resolved path isn't a directory.   
 
         Example:
-            >>> data = list(self.iter_directory(Path('example')))
+            >>> data = list(self.iter_directory(Path('example')), recursive=True)
         """
         resolved_path = self._safe_resolve(path)
         if not resolved_path.exists():
@@ -143,23 +146,42 @@ class FileManager():
         if not resolved_path.is_dir():
             raise NotADirectoryError("Path is not a directory.")
         
-        for child in resolved_path.iterdir():
-            try:
-                stats = child.stat()
-                is_dir = child.is_dir()
-            except (PermissionError, FileNotFoundError):
+        stack = [resolved_path]
+        visited = set()
+        
+        while stack:
+            current_path = stack.pop()
+            if current_path in visited:
                 continue
             
-            datetime_child = datetime.fromtimestamp(stats.st_mtime)
-            datetime_child = datetime_child.strftime(self.DT_TEMPLATE)
-            yield {
-                'name': child.name,
-                'path': str(child.relative_to(self._root_dir)),
-                'type': 'directory' if is_dir else 'file',
-                'size': stats.st_size,
-                'modified_at': datetime_child,
-                'extension': child.suffix.lstrip('.')
-            }
+            visited.add(current_path)
+            
+            try:
+                children = current_path.iterdir()
+            except (PermissionError, ValueError):
+                continue
+            for child in children:
+                try:
+                    stats = child.stat()
+                    is_dir = child.is_dir()
+                except (PermissionError, FileNotFoundError):
+                    continue
+                datetime_child = datetime.fromtimestamp(stats.st_mtime)
+                datetime_child = datetime_child.strftime(self.DT_TEMPLATE)
+                yield {
+                    'name': child.name,
+                    'path': str(child.relative_to(self._root_dir)),
+                    'type': 'directory' if is_dir else 'file',
+                    'size': stats.st_size,
+                    'modified_at': datetime_child,
+                    'extension': child.suffix.lstrip('.')
+                }
+                
+                if recursive and is_dir:
+                    resolved_child = self._safe_resolve(child)
+                    if resolved_child not in visited:
+                        stack.append(resolved_child)
+              
     def search(
             self, 
             name: str | None = None,
@@ -167,6 +189,7 @@ class FileManager():
             min_size: int | None = None,
             max_size: int | None = None,
             contains: str | None = None, 
+            recursive: bool = False,
             path: Path | None = None) -> Generator[dict, None, None]:
             """
             Search for files and directories within the root directory using multiple filters.
@@ -235,11 +258,14 @@ class FileManager():
                 if min_size > max_size:
                     raise ValueError('Minimum size must be lower than maximum size.') 
             
-            for item in self.iter_directory(path):
+            for item in self.iter_directory(path, recursive):
                 if all(pred(item) for pred in predicates):
                     yield item
 
-    def list_directory(self, path: Path, order_by: str | None = None) -> dict:
+    def list_directory(self, 
+                       path: Path, 
+                       recursive: bool = False, 
+                       order_by: str | None = None) -> dict:
         """
         Lists the contents of a directory within the root.
 
@@ -276,7 +302,7 @@ class FileManager():
             >>> fm.list_directory(Path('.'))
             >>> fm.list_directory(Path('.'), order_by='-size')
         """
-        data = list(self.iter_directory(path))
+        data = list(self.iter_directory(path, recursive))
 
         if order_by:
             field, reverse = self._order_by_key_normalize(order_by)
@@ -296,7 +322,5 @@ class FileManager():
             'data': data
         }
     
-        
-        
 if __name__ == '__main__':
     fm = FileManager(Path.cwd())

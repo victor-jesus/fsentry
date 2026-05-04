@@ -96,13 +96,13 @@ class TestListDirectoryOrderBy:
     def test_invalid_order_by_raises_value_error(self, tmp_path):
         fm = FileManager(tmp_path)
         with pytest.raises(ValueError):
-            fm.list_directory(Path('.'), 'invalid')
+            fm.list_directory(Path('.'), order_by='invalid')
 
     def test_valid_order_by(self, tmp_path):
         (tmp_path / "b_arquivo.txt").touch()
         (tmp_path / "a_arquivo.txt").touch()
         fm = FileManager(tmp_path)
-        result = fm.list_directory(Path('.'), 'name')
+        result = fm.list_directory(Path('.'), order_by='name')
         assert isinstance(result, dict)
         assert 'total' in result
         assert 'data' in result
@@ -113,7 +113,7 @@ class TestListDirectoryOrderBy:
         (tmp_path / "b_arquivo.txt").touch()
         (tmp_path / "a_arquivo.txt").touch()
         fm = FileManager(tmp_path)
-        result = fm.list_directory(Path('.'), '-name')
+        result = fm.list_directory(Path('.'), order_by='-name')
         assert isinstance(result, dict)
         assert 'total' in result
         assert 'data' in result
@@ -126,7 +126,7 @@ class TestListDirectoryOrderBy:
         small.write_text('a')
         large.write_text('a' * 1000)
         fm = FileManager(tmp_path)
-        result = fm.list_directory(Path('.'), 'size')
+        result = fm.list_directory(Path('.'), order_by='size')
         names = [item['name'] for item in result['data']]
         assert names == ['small.txt', 'large.txt']
 
