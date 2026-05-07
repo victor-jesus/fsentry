@@ -32,7 +32,7 @@ class FileManager():
         self.DT_TEMPLATE = dt_template
         self.VALID_ORDER_FIELDS = (
             valid_order_fields if valid_order_fields is not None 
-            else {'name', 'path', 'type', 'size', 'modified_at', 'extension'}
+            else {'name', 'path', 'type', 'size', 'modified_at', 'extension', 'is_symbolic_link'}
         )
         
         if not self._root_dir.exists():
@@ -95,11 +95,6 @@ class FileManager():
         """
         Parses an order_by key into field name and sort direction.
 
-        A leading '-' indicates descending order.
-
-        Args:
-            key: The order_by string, e.g. 'name' or '-name'.
-
         Returns:
             A tuple of (field: str, reverse: bool).
 
@@ -131,29 +126,18 @@ class FileManager():
         display_path: Path,
         resolved_path: Path,
         stats,
+        is_link: bool,
         is_dir: bool
     ) -> dict:
-        """
-        Build metadata using:
-        - display_path → identity (name, path, extension)
-        - resolved_path → trusted base (already validated)
-        - stats → already fetched (no extra syscall)
-        """
-        return {
-            'name': display_path.name,
-            'path': str(display_path.relative_to(self._root_dir)),
-            'type': 'directory' if is_dir else 'file',
-            'size': stats.st_size,
-            'modified_at': self._get_formatted_date(stats.st_mtime),
-            'extension': display_path.suffix.lstrip('.')
-        }
-        
-    def get_metadata(self, path: Path):
         """
         Returns metadata for a single file or directory.
 
         Args:
-            path: Path to the file or directory.
+            display_path: Path to the file or directory.
+            resolved_path: Validated path with root dir.
+            stats: Stats from a file/folder with Pathlib.
+            is_link: If it's a symbolic link.
+            is_dir: If it's a directory.
 
         Returns:
             dict: Metadata with the structure:
@@ -163,7 +147,57 @@ class FileManager():
                     'type': 'file' | 'directory',
                     'size': int,
                     'modified_at': str,
-                    'extension': str
+                    'extension': str,
+                    'is_symbolic_link': bool
+                }
+
+        Raises:
+            PermissionError: If the path is outside the root directory.
+            FileNotFoundError: If the path does not exist.
+
+        Notes:
+            - Performs NO validation before accessing filesystem metadata.
+            - Just use this method if the data has been validated before.
+
+        Example:
+            >>> fm.get_metadata(Path('file.txt'))
+        """
+        return {
+            'name': display_path.name,
+            'path': str(resolved_path.relative_to(self._root_dir)),
+            'type': 'directory' if is_dir else 'file',
+            'size': stats.st_size,
+            'modified_at': self._get_formatted_date(stats.st_mtime),
+            'extension': display_path.suffix.lstrip('.'),
+            'is_symbolic_link': True if is_link else False
+        }
+        
+    def get_metadata(
+        self, 
+        path: Path, 
+        hidden_files: bool = False,
+        allow_symbolic_link: bool = False,
+        recursive: bool = False):
+        """
+        Returns metadata for a single file or directory.
+
+        Args:
+            display_path: Path to the file or directory.
+            resolved_path: Validated path with root dir.
+            stats: Stats from a file/folder with Pathlib.
+            is_link: If it's a symbolic link.
+            is_dir: If it's a directory.
+
+        Returns:
+            dict: Metadata with the structure:
+                {
+                    'name': str,
+                    'path': str,
+                    'type': 'file' | 'directory',
+                    'size': int,
+                    'modified_at': str,
+                    'extension': str,
+                    'is_symbolic_link': bool
                 }
 
         Raises:
@@ -177,20 +211,58 @@ class FileManager():
         Example:
             >>> fm.get_metadata(Path('file.txt'))
         """
-        resolved_path = self._safe_resolve(path)
-        self._ensure_exists(resolved_path)
+        if not hidden_files and path.name.startswith("."):
+            return
+                
+        # Symlink verification         
+        link_stat = path.lstat()
+        is_link = stat.S_ISLNK(link_stat.st_mode)
+        if is_link and not allow_symbolic_link:
+            return
         
-        stats = resolved_path.stat()
-        is_dir = stat.S_ISDIR(stats.st_mode)
-        modification_time = stats.st_mtime
+        resolved = self._safe_resolve(path)
+        st = path.stat() if is_link else link_stat
         
-        #return self._get_metadata(resolresolved_path, stats, is_dir)
+        is_dir = stat.S_ISDIR(st.st_mode)
+                        
+        return self._get_metadata(
+            display_path=path, 
+            resolved_path=resolved,
+            stats=st,  
+            is_dir=is_dir,
+            is_link=is_link
+        )
     
-    def iter_directory(self, 
-                    path: Path, 
-                    hidden_files: bool = False,
-                    symbolic_link: bool = False,
-                    recursive: bool = False) -> Generator[dict, None, None]:
+    def iter_directory(
+        self, 
+        path: Path, 
+        allow_symbolic_link: bool = False,
+        hidden_files: bool = False,
+        recursive: bool = False) -> Generator[dict, None, None]:
+        """
+        Iterate through a directory using multiple permissions.
+
+        This method is lazy (generator-based), yielding results incrementally.
+
+        Args:
+            path: Directory to search. Defaults to root ('.').
+            allow_symbolic_link: If False, symbolic links are excluded.
+            hidden_files: If False, hidden files are excluded.
+            recursive: If True, search includes subdirectories.
+
+        Yields:
+            dict: Metadata, from _get_metadata, dictionary for each matching item.
+
+        Raises:
+            PermissionError: If the path is outside the root directory (Symbolic Link included).
+            FileNotFoundError: If the path does not exist.
+            NotADirectoryError: If the path is not a directory.
+            ValueError: If min_size > max_size.
+    
+        Example:
+            >>> list(fm.search(name="report", recursive=True))
+            >>> list(fm.search(extension="pdf", min_size=1000))
+        """
 
         resolved_path = self._safe_resolve(path)
         self._ensure_exists(resolved_path)
@@ -212,20 +284,21 @@ class FileManager():
             except (PermissionError, ValueError):
                 continue
             
-            for child in children:    
+            for child in children:
+                    
                 if not hidden_files and child.name.startswith("."):
                     continue
                 
+                # Symlink verification
                 try:                    
                     link_stat = child.lstat()
                 except (PermissionError, FileNotFoundError):
                     continue
-                
                 is_link = stat.S_ISLNK(link_stat.st_mode)
-                
-                if is_link and not symbolic_link:
+                if is_link and not allow_symbolic_link:
                     continue
                 
+                # Resolved path
                 try:
                     resolved = self._safe_resolve(child)
                 except PermissionError:
@@ -237,12 +310,13 @@ class FileManager():
                     continue
                 
                 is_dir = stat.S_ISDIR(st.st_mode)
-                
+                                
                 yield self._get_metadata(
                     display_path=child, 
                     resolved_path=resolved,
                     stats=st,  
-                    is_dir=is_dir
+                    is_dir=is_dir,
+                    is_link=is_link
                 )
                 
                 if recursive and is_dir:
@@ -256,6 +330,7 @@ class FileManager():
         min_size: int | None = None,
         max_size: int | None = None,
         contains: str | None = None,
+        allow_symbolic_link: bool = False,
         hidden_files: bool = False, 
         recursive: bool = False,
         path: Path | None = None) -> Generator[dict, None, None]:
@@ -272,6 +347,7 @@ class FileManager():
             min_size: Minimum size in bytes (inclusive).
             max_size: Maximum size in bytes (inclusive).
             contains: Case-insensitive substring match across all fields.
+            allow_symbolic_link: If False, symbolic links are excluded.
             hidden_files: If False, hidden files are excluded.
             recursive: If True, search includes subdirectories.
             path: Directory to search. Defaults to root ('.').
@@ -284,6 +360,12 @@ class FileManager():
             FileNotFoundError: If the path does not exist.
             NotADirectoryError: If the path is not a directory.
             ValueError: If min_size > max_size.
+            
+        Returns:
+            dict:
+                {
+                    [metadata_dict, ...]
+                }
 
         Notes:
             - Delegates traversal to `iter_directory`.
@@ -321,16 +403,16 @@ class FileManager():
                 lambda item: any(contains_lower in str(v).lower() for v in item.values())
             )
             
-        for item in self.iter_directory(path, hidden_files, recursive):
+        for item in self.iter_directory(path, hidden_files=hidden_files, allow_symbolic_link=allow_symbolic_link, recursive=recursive):
             if all(pred(item) for pred in predicates):
                 yield item
 
     def list_directory(
         self, 
         path: Path, 
-        recursive: bool = False, 
+        allow_symbolic_link: bool = False,
         hidden_files: bool = False,
-        symbolic_link: bool = False,
+        recursive: bool = False, 
         order_by: str | None = None) -> dict:
         """
         Lists directory contents with optional recursion and sorting.
@@ -339,8 +421,9 @@ class FileManager():
 
         Args:
             path: Directory to list. Can be relative to root or absolute.
-            recursive: If True, includes all subdirectories.
+            allow_symbolic_link: If False, symbolic links are excluded.
             hidden_files: If False, excludes hidden files.
+            recursive: If True, includes all subdirectories.
             order_by: Field to sort by. Prefix with '-' for descending.
                 Valid fields: name, path, type, size, modified_at, extension.
 
@@ -365,7 +448,7 @@ class FileManager():
             >>> fm.list_directory(Path('.'))
             >>> fm.list_directory(Path('.'), recursive=True, order_by='-size')
         """
-        data = list(self.iter_directory(path, hidden_files=hidden_files, recursive=recursive, symbolic_link=symbolic_link))
+        data = list(self.iter_directory(path, hidden_files=hidden_files, recursive=recursive, allow_symbolic_link=allow_symbolic_link))
 
         if order_by:
             field, reverse = self._order_by_key_normalize(order_by)
@@ -387,6 +470,3 @@ class FileManager():
     
 if __name__ == '__main__':
     fm = FileManager(Path.cwd())
-    test = fm.list_directory(Path('teste'), recursive=True, order_by="-name", symbolic_link=False)
-    for item in test['data']:
-        print(item)
