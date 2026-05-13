@@ -2,12 +2,13 @@ from pathlib import Path
 from datetime import datetime
 from collections.abc import Generator
 import stat
+import shutil
 
-from filemanager.models import FileEntry
-from filemanager.serializers import serialize_entry
-from filemanager.security import safe_resolve, is_key_valid, ensure_dir, ensure_exists
+from fsentry.models import FileEntry
+from fsentry.serializers import serialize_entry
+from fsentry.security import safe_resolve, is_key_valid, ensure_dir, ensure_exists
 
-class FileManager():
+class Fsentry():
     """
     A file manager that provides safe file system operations within a root directory.
 
@@ -21,7 +22,7 @@ class FileManager():
         NotADirectoryError: If the root path is not a directory.
 
     Example:
-        >>> fm = FileManager('/home/user/documents', '%d-%m-%Y %H:%M:%S', {'name', 'path', 'type', 'size', 'modified_at', 'extension'})
+        >>> fm = Fsentry('/home/user/documents', '%d-%m-%Y %H:%M:%S', {'name', 'path', 'type', 'size', 'modified_at', 'extension'})
         >>> fm.list_directory(Path('.'))
     """
 
@@ -74,8 +75,6 @@ class FileManager():
         """
             Validate and returns an object of type FileEntry.
         """
-        
-        
         if not hidden_files and path.name.startswith("."):
             return
                     
@@ -324,6 +323,100 @@ class FileManager():
             'total': len(data),
             'data': data
         }
-    
+        
+    def touch(self, path: Path):
+        resolved_path = safe_resolve(path, self._root_dir)
+        try:
+            resolved_path.touch(exist_ok=False)
+        except FileExistsError:
+            raise FileExistsError(f'Error: file named {resolved_path.name} already exists.')
+        
+        entry = self._build_entry(resolved_path, hidden_files=True, allow_symbolic_links=True)
+        if entry is None:
+            raise RuntimeError(f'Failed to build entry after move: {resolved_path}')  
+
+        return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
+        
+    def mkdir(
+        self, 
+        path: Path, 
+        parents: bool = True, 
+        exist_ok: bool = True
+    ):
+        """
+                parents: bool -> When creating a file/folder, 
+                creates the parents if not exists
+                exist_ok: bool -> 
+        """
+        
+        resolved_path = safe_resolve(path, self._root_dir)
+        try:
+            resolved_path.mkdir(parents=parents, exist_ok=exist_ok)
+        except FileExistsError:
+            raise FileExistsError(f'Error: folder named {resolved_path.name} already exists.')
+        
+        entry = self._build_entry(resolved_path, hidden_files=True, allow_symbolic_links=True)
+        if entry is None:
+            raise RuntimeError(f'Failed to build entry after move: {resolved_path}')  
+        
+        return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
+
+        
+    def move(
+        self, 
+        path_source: list[Path], 
+        path_destination: Path, 
+        parents: bool = True, 
+        exist_ok = True
+    ):
+        resolved_dst = safe_resolve(path_destination, self._root_dir)
+        resolved_dst.mkdir(parents=parents, exist_ok=exist_ok)
+        
+        results = []
+        for path in path_source:
+            resolved_src = safe_resolve(path, self._root_dir)
+            ensure_exists(resolved_src)
+            
+            final_dst = resolved_dst / resolved_src.name
+            
+            resolved_src.rename(final_dst)
+            
+            entry = self._build_entry(final_dst, hidden_files=True, allow_symbolic_links=True)
+            if entry is None:
+                raise RuntimeError(f'Failed to build entry after move: {final_dst}')  
+            
+            results.append(serialize_entry(entry, self._root_dir, self.DT_TEMPLATE))          
+        
+        return results
+            
+    def copy(
+        self, 
+        src: Path, 
+        dst: Path, 
+        parents: bool = True, 
+        exist_ok : bool = True
+    ) -> dict:
+        """
+            This function copies the object in src path to dst Path.
+            
+            If the folder doesn't exists, it will create it.
+        """
+        src = safe_resolve(src, self._root_dir)
+        dst = safe_resolve(dst, self._root_dir)
+        ensure_exists(src)
+        
+        self.mkdir(dst, parents=parents, exist_ok=exist_ok)
+        
+        if src.is_dir(): 
+            shutil.copytree(src, (dst / src.name)) 
+        else: 
+            shutil.copy2(src, dst)
+            
+        entry = self._build_entry(dst, hidden_files=True, allow_symbolic_links=True)
+        if entry is None: 
+            raise RuntimeError(f'Not possible to copy object from {src} to {dst}')
+            
+        return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
+
 if __name__ == '__main__':
-    fm = FileManager(Path.cwd().parent.parent)
+    fm = Fsentry(Path.cwd())

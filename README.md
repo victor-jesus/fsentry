@@ -77,9 +77,10 @@ pytest
 - [x] `list_directory` — List directory contents with metadata
 - [x] `search` — Search files and directories with multiple filters
 - [ ] `info` — Get detailed metadata of a file or directory
-- [ ] `mkdir` — Create a new directory
+- [x] `mkdir` — Create a new directory
 - [ ] `delete` — Delete a file or directory
-- [ ] `move` — Move or rename a file or directory
+- [x] `move` — Move or rename a file or directory
+- [x] `touch` — Create a new file.
 - [ ] `copy` — Copy a file or directory
 - [ ] `upload` — Save a file from bytes
 - [ ] `download` — Read and return file bytes

@@ -1,4 +1,4 @@
-from filemanager.models import FileEntry
+from fsentry.models import FileEntry
 from datetime import datetime
 from pathlib import Path
 
