@@ -324,6 +324,17 @@ class Fsentry():
             'data': data
         }
         
+    def info(self, path: Path):
+        resolved_path = safe_resolve(path, self._root_dir)
+        ensure_exists(resolved_path)
+        
+        entry = self._build_entry(resolved_path, hidden_files=True, allow_symbolic_links=True)
+        
+        if entry is None:
+            raise RuntimeError(f'Failed to build entry after info: {resolved_path}')  
+        
+        return serialize_entry(entry, self._root_dir, self.DT_TEMPLATE)
+    
     def touch(self, path: Path):
         resolved_path = safe_resolve(path, self._root_dir)
         try:
@@ -333,7 +344,7 @@ class Fsentry():
         
         entry = self._build_entry(resolved_path, hidden_files=True, allow_symbolic_links=True)
         if entry is None:
-            raise RuntimeError(f'Failed to build entry after move: {resolved_path}')  
+            raise RuntimeError(f'Failed to build entry after touch: {resolved_path}')  
 
         return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
         
@@ -357,7 +368,7 @@ class Fsentry():
         
         entry = self._build_entry(resolved_path, hidden_files=True, allow_symbolic_links=True)
         if entry is None:
-            raise RuntimeError(f'Failed to build entry after move: {resolved_path}')  
+            raise RuntimeError(f'Failed to build entry after mkdir: {resolved_path}')  
         
         return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
 
@@ -369,17 +380,17 @@ class Fsentry():
         parents: bool = True, 
         exist_ok = True
     ):
-        resolved_dst = safe_resolve(path_destination, self._root_dir)
-        resolved_dst.mkdir(parents=parents, exist_ok=exist_ok)
+        dst = safe_resolve(path_destination, self._root_dir)
+        dst.mkdir(parents=parents, exist_ok=exist_ok)
         
         results = []
         for path in path_source:
-            resolved_src = safe_resolve(path, self._root_dir)
-            ensure_exists(resolved_src)
+            src = safe_resolve(path, self._root_dir)
+            ensure_exists(src)
             
-            final_dst = resolved_dst / resolved_src.name
+            final_dst = dst / src.name
             
-            resolved_src.rename(final_dst)
+            src.rename(final_dst)
             
             entry = self._build_entry(final_dst, hidden_files=True, allow_symbolic_links=True)
             if entry is None:
@@ -412,11 +423,32 @@ class Fsentry():
         else: 
             shutil.copy2(src, dst)
             
-        entry = self._build_entry(dst, hidden_files=True, allow_symbolic_links=True)
+        entry = self._build_entry(dst / src.name, hidden_files=True, allow_symbolic_links=True)
         if entry is None: 
-            raise RuntimeError(f'Not possible to copy object from {src} to {dst}')
+            raise RuntimeError(f'Failed to build entry after copy: {src} to {dst}')  
             
-        return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
+        return serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)        
+        
+    def delete(self, path: list[Path]):
+        """
+            This function deletes files or folders in and returns metadata.
+            
+            This method is lazy (generator-based), yielding results incrementally.
+        """
+        for link in path:
+            link = safe_resolve(link, self._root_dir)
+            ensure_exists(link)
+            
+            entry = self._build_entry(link, hidden_files=True, allow_symbolic_links=True)
+            if entry is None:
+                raise RuntimeError(f'Failed to build entry after delete: {link}')  
+
+            if link.is_dir():
+                shutil.rmtree(link)
+            else:
+                link.unlink()
+
+            yield serialize_entry(entry, self._root_dir, dt_template=self.DT_TEMPLATE)
 
 if __name__ == '__main__':
     fm = Fsentry(Path.cwd())
